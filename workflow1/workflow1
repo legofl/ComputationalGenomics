@@ -1,0 +1,79 @@
+#!/usr/bin/env nextflow
+
+/*
+* Workflow Assignment 1
+*/
+
+nextflow.enable.dsl = 2
+
+params.reads = "$projectDir/data/*_{1,2}*.fastq.gz"
+params.outdir = "results"
+
+/* Trims reads using trimmomatic.
+*  Requires paired fastq files
+*  Outputs trimmed and unpaired fastq files
+*  Use phred33 score for over 99.9% base call accuracy
+*/
+process READTRIM {
+    tag "Sequence Identifier ${seq_id}"
+
+    input:
+    tuple val(seq_id), path(read1), path(read2)
+
+    output:
+    tuple val(seq_id), path("${seq_id}_1.trimmed.fastq.gz"), path("${seq_id}_2.trimmed.fastq.gz")
+
+    // Run trimmomatic to trim fastq files
+    script:
+    """
+    trimmomatic PE -phred33 \
+    $read1 $read2 \
+    ${seq_id}_1.trimmed.fastq.gz \
+    ${seq_id}_1.unpaired.fastq.gz \
+    ${seq_id}_2.trimmed.fastq.gz \
+    ${seq_id}_2.unpaired.fastq.gz \
+    ILLUMINACLIP:TruSeq3-PE.fa:2:30:10:8:true SLIDINGWINDOW:4:15 MINLEN:36
+    """
+    
+}
+
+/* Use spades to assemble files after trimming
+*  Takes in trimmed fastq files
+*  Outputs assembly data from these trimmed files
+*/
+process ASSEMBLE {
+    tag "Sequence Identifier ${seq_id}"
+
+    input:
+    tuple val(seq_id), path(r1_trimmed), path(r2_trimmed)
+
+    output:
+    path("${seq_id}.assembly")
+
+    // Run spades to assemble trimmed files
+    script:
+    """
+    spades.py --meta \
+    -1 $r1_trimmed \
+    -2 $r2_trimmed \
+    -o ${seq_id}.assembly
+    """
+
+}
+
+/* Workflow runs the processes above
+*  Pass in params.reads for the sequence pairs
+*  Then pass in the sequence pairs to run read trimming process
+*  Then pass the outputted trimmed reads to be assembled by assemble process
+*  Finally, outputs a message that the process completed with the path
+*/
+workflow {
+    seq_pairs = Channel.fromFilePairs(params.reads, size: 2, flat: true, checkIfExists: true)
+
+    // Just need to pass previous var/run to the next one
+    trimmed_reads = READTRIM(seq_pairs)
+    assembled_fasta = ASSEMBLE(trimmed_reads)
+
+    // Gives message after completed with path
+    assembled_fasta.view { it -> "Reads trimmed and assembled: ${it}" }
+}
